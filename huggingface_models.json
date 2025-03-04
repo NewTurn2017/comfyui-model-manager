@@ -1,3 +1,24 @@
 {
-  "models": {}
+  "models": {},
+  "config": {
+    "base_path": "/workspace/ComfyUI/models",
+    "civitai_token": "66b77acb9e843c7d8eddd32bef3023b4",
+    "custom_repos": {
+      "imp": {
+        "repo_id": "tomjackson2023/test",
+        "patterns": ["imp_v10.safetensors"],
+        "dir_type": "checkpoints"
+      },
+      "old cartoon avatar": {
+        "repo_id": "Genie-hub/old-cartoon-avatar",
+        "patterns": ["Old cartoon avatar_v.01.safetensors"],
+        "dir_type": "loras"
+      },
+      "1": {
+        "repo_id": "moonshotmillion/AnimateDiff_LCM_Motion_Model_v1",
+        "patterns": ["animatediffLCMMotion_v10.ckpt"],
+        "dir_type": "animatediff_models"
+      }
+    }
+  }
 }

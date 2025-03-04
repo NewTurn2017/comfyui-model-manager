@@ -34,7 +34,8 @@ MODEL_DIRS = {
     "clip_vision": "clip_vision",
     "pulid": "pulid",
     "embeddings": "embeddings",
-    "hypernetworks": "hypernetworks"
+    "hypernetworks": "hypernetworks",
+    "animatediff_models": "animatediff_models"
 }
 
 # Civitai 모델 타입 매핑
@@ -61,25 +62,49 @@ class ComfyUIModelManager:
 
     def _load_config(self) -> Dict[str, Any]:
         """설정 파일을 로드하거나 기본 설정을 사용합니다."""
-        config_path = Path.home() / ".comfyui_model_manager.json"
+        config_path = Path(__file__).parent / "huggingface_models.json"
 
         if config_path.exists():
             try:
                 with open(config_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    # 기본 설정에 없는 키가 있으면 추가
-                    for key, value in DEFAULT_CONFIG.items():
-                        if key not in config:
-                            config[key] = value
-                    return config
+                    data = json.load(f)
+
+                    # models 키가 있는지 확인 (huggingface_models.json 파일 구조)
+                    if "models" in data:
+                        # 기존 models 정보 보존
+                        models_data = data.get("models", {})
+
+                        # config 정보가 있으면 로드, 없으면 기본값
+                        config = data.get("config", DEFAULT_CONFIG)
+
+                        # 기본 설정에 없는 키가 있으면 추가
+                        for key, value in DEFAULT_CONFIG.items():
+                            if key not in config:
+                                config[key] = value
+
+                        return config
+                    else:
+                        # 기존 형식이 아닌 경우 그대로 사용
+                        config = data
+                        # 기본 설정에 없는 키가 있으면 추가
+                        for key, value in DEFAULT_CONFIG.items():
+                            if key not in config:
+                                config[key] = value
+                        return config
             except Exception as e:
                 print(f"설정 파일 로드 오류: {e}")
                 print("기본 설정을 사용합니다.")
 
         # 설정 파일이 없으면 기본 설정 생성
         try:
+            # 이미 huggingface_models.json 파일이 없는 경우 새로 생성
             with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
+                # 초기 구조는 models 정보와 config 정보를 포함
+                data = {
+                    "models": {},
+                    "config": DEFAULT_CONFIG
+                }
+                json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"설정 파일 생성 오류: {e}")
 
@@ -98,23 +123,36 @@ class ComfyUIModelManager:
             with open(models_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
-                for model_id, model_info in data["models"].items():
-                    model_id = int(model_id)
-                    self.huggingface_models[model_id] = (
-                        model_info["repo_id"],
-                        model_info["patterns"],
-                        model_info["dir_type"]
-                    )
-                    self.huggingface_descriptions[model_id] = model_info["description"]
+                if "models" in data:
+                    for model_id, model_info in data["models"].items():
+                        model_id = int(model_id)
+                        self.huggingface_models[model_id] = (
+                            model_info["repo_id"],
+                            model_info["patterns"],
+                            model_info["dir_type"]
+                        )
+                        self.huggingface_descriptions[model_id] = model_info["description"]
         except Exception as e:
             print(f"HuggingFace 모델 데이터 로드 오류: {e}")
 
     def _save_config(self):
         """현재 설정을 파일에 저장합니다."""
-        config_path = Path.home() / ".comfyui_model_manager.json"
+        config_path = Path(__file__).parent / "huggingface_models.json"
+
         try:
+            # 기존 파일이 있으면 내용 읽기
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            else:
+                data = {"models": {}}
+
+            # config 업데이트
+            data["config"] = self.config
+
+            # 파일에 저장
             with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, indent=2, ensure_ascii=False)
+                json.dump(data, f, indent=2, ensure_ascii=False)
             print("설정이 저장되었습니다.")
         except Exception as e:
             print(f"설정 저장 오류: {e}")
@@ -556,12 +594,24 @@ def show_menu(manager):
                     name = input("저장소 이름: ")
                     repo_id = input("HuggingFace Repo ID: ")
                     patterns = input("파일 패턴 (쉼표로 구분): ").split(",")
-                    print("가능한 디렉토리 유형:")
-                    for key in MODEL_DIRS.keys():
-                        print(f"- {key}")
-                    dir_type = input("디렉토리 유형: ")
 
-                    manager.add_custom_repo(name, repo_id, patterns, dir_type)
+                    # 디렉토리 유형을 번호로 선택하도록 수정
+                    print("디렉토리 유형을 선택하세요:")
+                    dir_types = list(MODEL_DIRS.keys())
+                    for idx, key in enumerate(dir_types, 1):
+                        print(f"{idx}: {key}")
+
+                    dir_choice = input("선택 (번호): ")
+                    try:
+                        dir_idx = int(dir_choice) - 1
+                        if 0 <= dir_idx < len(dir_types):
+                            dir_type = dir_types[dir_idx]
+                            manager.add_custom_repo(
+                                name, repo_id, patterns, dir_type)
+                        else:
+                            print("잘못된 선택입니다.")
+                    except ValueError:
+                        print("숫자를 입력해야 합니다.")
 
                 elif repo_choice == "2":
                     name = input("제거할 저장소 이름: ")
@@ -576,8 +626,34 @@ def show_menu(manager):
                         print(f"  디렉토리: {repo['dir_type']}")
 
                 elif repo_choice == "4":
-                    name = input("다운로드할 저장소 이름: ")
-                    manager.download_custom_repo(name)
+                    # 먼저 저장소 목록을 표시
+                    print("\n사용자 정의 저장소:")
+                    repos = list(manager.config["custom_repos"].keys())
+                    if not repos:
+                        print("등록된 저장소가 없습니다.")
+                        continue
+
+                    for idx, name in enumerate(repos, 1):
+                        repo = manager.config["custom_repos"][name]
+                        print(
+                            f"{idx}: {name} (Repo ID: {repo['repo_id']}, 디렉토리: {repo['dir_type']})")
+
+                    repo_choice = input("\n다운로드할 저장소 선택 (번호 또는 이름): ")
+
+                    try:
+                        # 번호로 입력한 경우
+                        idx = int(repo_choice) - 1
+                        if 0 <= idx < len(repos):
+                            name = repos[idx]
+                            manager.download_custom_repo(name)
+                        else:
+                            print("잘못된 선택입니다.")
+                    except ValueError:
+                        # 이름으로 입력한 경우
+                        if repo_choice in repos:
+                            manager.download_custom_repo(repo_choice)
+                        else:
+                            print(f"저장소 '{repo_choice}'를 찾을 수 없습니다.")
 
                 elif repo_choice == "0":
                     break
