@@ -18,6 +18,81 @@
         "repo_id": "moonshotmillion/AnimateDiff_LCM_Motion_Model_v1",
         "patterns": ["animatediffLCMMotion_v10.ckpt"],
         "dir_type": "animatediff_models"
+      },
+      "lllyasviel/fooocus_inpaint1": {
+        "repo_id": "lllyasviel/fooocus_inpaint",
+        "patterns": ["fooocus_inpaint_head.pth"],
+        "dir_type": "inpaint"
+      },
+      "lllyasviel/fooocus_inpaint2": {
+        "repo_id": "lllyasviel/fooocus_inpaint",
+        "patterns": ["fooocus_lama.safetensors"],
+        "dir_type": "inpaint"
+      },
+      "lllyasviel/fooocus_inpaint3": {
+        "repo_id": "lllyasviel/fooocus_inpaint",
+        "patterns": ["inpaint.fooocus.patch"],
+        "dir_type": "inpaint"
+      },
+      "lllyasviel/fooocus_inpaint4": {
+        "repo_id": "lllyasviel/fooocus_inpaint",
+        "patterns": ["inpaint_v25.fooocus.patch"],
+        "dir_type": "inpaint"
+      },
+      "lllyasviel/fooocus_inpaint5": {
+        "repo_id": "lllyasviel/fooocus_inpaint",
+        "patterns": ["inpaint_v26.fooocus.patch"],
+        "dir_type": "inpaint"
+      },
+      "couple-profile.safetensors": {
+        "repo_id": "ali-vilab/In-Context-LoRA",
+        "patterns": ["couple-profile.safetensors"],
+        "dir_type": "loras"
+      },
+      "film-storyboard.safetensors": {
+        "repo_id": "ali-vilab/In-Context-LoRA",
+        "patterns": ["film-storyboard.safetensors"],
+        "dir_type": "loras"
+      },
+      "font-design.safetensors": {
+        "repo_id": "ali-vilab/In-Context-LoRA",
+        "patterns": ["font-design.safetensors"],
+        "dir_type": "loras"
+      },
+      "home-decoration.safetensors": {
+        "repo_id": "ali-vilab/In-Context-LoRA",
+        "patterns": ["home-decoration.safetensors"],
+        "dir_type": "loras"
+      },
+      "portrait-illustration.safetensors": {
+        "repo_id": "ali-vilab/In-Context-LoRA",
+        "patterns": ["portrait-illustration.safetensors"],
+        "dir_type": "loras"
+      },
+      "portrait-photography.safetensors": {
+        "repo_id": "ali-vilab/In-Context-LoRA",
+        "patterns": ["portrait-photography.safetensors"],
+        "dir_type": "loras"
+      },
+      "ppt-templates.safetensors": {
+        "repo_id": "ali-vilab/In-Context-LoRA",
+        "patterns": ["ppt-templates.safetensors"],
+        "dir_type": "loras"
+      },
+      "sandstorm-visual-effect.safetensors": {
+        "repo_id": "ali-vilab/In-Context-LoRA",
+        "patterns": ["sandstorm-visual-effect.safetensors"],
+        "dir_type": "loras"
+      },
+      "sparklers-visual-effect.safetensors": {
+        "repo_id": "ali-vilab/In-Context-LoRA",
+        "patterns": ["sparklers-visual-effect.safetensors"],
+        "dir_type": "loras"
+      },
+      "visual-identity-design.safetensors": {
+        "repo_id": "ali-vilab/In-Context-LoRA",
+        "patterns": ["visual-identity-design.safetensors"],
+        "dir_type": "loras"
       }
     }
   }

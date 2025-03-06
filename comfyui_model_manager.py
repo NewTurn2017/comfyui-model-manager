@@ -384,29 +384,113 @@ class ComfyUIModelManager:
         """사용자 정의 저장소에서 모델을 다운로드합니다."""
         from huggingface_hub import snapshot_download
 
-        if name not in self.config["custom_repos"]:
-            print(f"오류: 저장소 '{name}'를 찾을 수 없습니다.")
+        # 다운로드할 저장소 목록을 해석
+        repo_names = []
+
+        # 콤마로 구분된 형식 (예: "1,3,5")
+        if "," in name:
+            parts = [part.strip() for part in name.split(",")]
+            for part in parts:
+                try:
+                    # 숫자인 경우 인덱스로 처리
+                    idx = int(part) - 1
+                    repos = list(self.config["custom_repos"].keys())
+                    if 0 <= idx < len(repos):
+                        repo_names.append(repos[idx])
+                    else:
+                        print(f"오류: 인덱스 '{part}'가 범위를 벗어납니다.")
+                except ValueError:
+                    # 이름인 경우 그대로 사용
+                    if part in self.config["custom_repos"]:
+                        repo_names.append(part)
+                    else:
+                        print(f"오류: 저장소 '{part}'를 찾을 수 없습니다.")
+
+        # 범위 형식 (예: "1-3")
+        elif "-" in name:
+            try:
+                start, end = map(int, name.split("-"))
+                repos = list(self.config["custom_repos"].keys())
+                for idx in range(start-1, end):
+                    if 0 <= idx < len(repos):
+                        repo_names.append(repos[idx])
+                    else:
+                        print(f"오류: 인덱스 '{idx+1}'가 범위를 벗어납니다.")
+            except ValueError:
+                print(f"오류: 범위 '{name}'의 형식이 잘못되었습니다. 예: '1-3'")
+
+        # 단일 저장소
+        else:
+            try:
+                # 숫자인 경우 인덱스로 처리
+                idx = int(name) - 1
+                repos = list(self.config["custom_repos"].keys())
+                if 0 <= idx < len(repos):
+                    repo_names.append(repos[idx])
+                else:
+                    print(f"오류: 인덱스 '{name}'가 범위를 벗어납니다.")
+            except ValueError:
+                # 이름인 경우 그대로 사용
+                if name in self.config["custom_repos"]:
+                    repo_names.append(name)
+                else:
+                    print(f"오류: 저장소 '{name}'를 찾을 수 없습니다.")
+
+        if not repo_names:
+            print("다운로드할 저장소가 없습니다.")
             return False
 
-        repo = self.config["custom_repos"][name]
-        repo_id = repo["repo_id"]
-        patterns = repo["patterns"]
-        dir_type = repo["dir_type"]
-        target_dir = self.base_path / MODEL_DIRS[dir_type]
+        # 선택된 저장소 목록 표시
+        print(f"\n다운로드할 저장소: {len(repo_names)}개")
+        for repo_name in repo_names:
+            repo = self.config["custom_repos"][repo_name]
+            print(f"- {repo_name} (Repo ID: {repo['repo_id']})")
 
-        print(f"다운로드 중: {name} (repo: {repo_id})")
+        # 병렬 다운로드 함수 정의
+        def download_repo(repo_name):
+            if repo_name not in self.config["custom_repos"]:
+                print(f"오류: 저장소 '{repo_name}'를 찾을 수 없습니다.")
+                return False
 
-        try:
-            snapshot_download(
-                repo_id=repo_id,
-                allow_patterns=patterns,
-                local_dir=str(target_dir)
-            )
-            print(f"다운로드 완료: {target_dir}")
-            return True
-        except Exception as e:
-            print(f"다운로드 오류: {e}")
-            return False
+            repo = self.config["custom_repos"][repo_name]
+            repo_id = repo["repo_id"]
+            patterns = repo["patterns"]
+            dir_type = repo["dir_type"]
+            target_dir = self.base_path / MODEL_DIRS[dir_type]
+
+            print(f"다운로드 시작: {repo_name} (repo: {repo_id})")
+
+            try:
+                snapshot_download(
+                    repo_id=repo_id,
+                    allow_patterns=patterns,
+                    local_dir=str(target_dir)
+                )
+                print(f"다운로드 완료: {repo_name} → {target_dir}")
+                return True
+            except Exception as e:
+                print(f"다운로드 오류 ({repo_name}): {e}")
+                return False
+
+        # 병렬로 다운로드 실행
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(repo_names))) as executor:
+            future_to_repo = {executor.submit(
+                download_repo, repo_name): repo_name for repo_name in repo_names}
+            for future in concurrent.futures.as_completed(future_to_repo):
+                repo_name = future_to_repo[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    print(f"다운로드 실패 ({repo_name}): {e}")
+                    results.append(False)
+
+        # 결과 요약
+        success_count = results.count(True)
+        print(f"\n다운로드 결과: {success_count}/{len(repo_names)} 성공")
+
+        return success_count > 0
 
     def list_models(self):
         """모든 모델 디렉토리의 모델을 나열합니다."""
@@ -656,7 +740,11 @@ def show_menu(manager):
                         print(
                             f"{idx}: {name} (Repo ID: {repo['repo_id']}, 디렉토리: {repo['dir_type']})")
 
-                    repo_choice = input("\n다운로드할 저장소 선택 (번호 또는 이름): ")
+                    print("\n팁: 여러 저장소를 선택하려면 다음 형식을 사용하세요:")
+                    print("  - 범위 지정: '4-6' (4번부터 6번까지)")
+                    print("  - 개별 지정: '4,6' (4번과 6번)")
+
+                    repo_choice = input("\n다운로드할 저장소 선택 (번호, 범위 또는 이름): ")
 
                     try:
                         # 번호로 입력한 경우
