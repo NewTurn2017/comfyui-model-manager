@@ -221,12 +221,14 @@ class ComfyUIModelManager:
                 snapshot_download(
                     repo_id=repo_id,
                     allow_patterns=patterns,
-                    local_dir=str(target_dir)
+                    local_dir=str(target_dir),
+                    progress_bar=False
                 )
             else:
                 snapshot_download(
                     repo_id=repo_id,
-                    local_dir=str(target_dir)
+                    local_dir=str(target_dir),
+                    progress_bar=False
                 )
             print(f"다운로드 완료: {target_dir}")
             return True
@@ -465,7 +467,8 @@ class ComfyUIModelManager:
                 snapshot_download(
                     repo_id=repo_id,
                     allow_patterns=patterns,
-                    local_dir=str(target_dir)
+                    local_dir=str(target_dir),
+                    progress_bar=False
                 )
                 print(f"다운로드 완료: {repo_name} → {target_dir}")
                 return True
