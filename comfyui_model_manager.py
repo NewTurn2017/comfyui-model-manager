@@ -747,24 +747,23 @@ def show_menu(manager):
 
                     repo_choice = input("\n다운로드할 저장소 선택 (번호, 범위 또는 이름): ")
 
-                    # 범위 또는 콤마 구분 입력 확인
-                    if "-" in repo_choice or "," in repo_choice:
-                        manager.download_custom_repo(repo_choice)
-                    else:
-                        try:
-                            # 단일 번호로 입력한 경우
-                            idx = int(repo_choice) - 1
-                            if 0 <= idx < len(repos):
-                                name = repos[idx]
-                                manager.download_custom_repo(name)
-                            else:
-                                print("잘못된 선택입니다.")
-                        except ValueError:
-                            # 이름으로 입력한 경우
-                            if repo_choice in repos:
-                                manager.download_custom_repo(repo_choice)
-                            else:
-                                print(f"저장소 '{repo_choice}'를 찾을 수 없습니다.")
+                    # 단일 숫자로 입력한 경우
+                    try:
+                        idx = int(repo_choice) - 1
+                        if 0 <= idx < len(repos):
+                            name = repos[idx]
+                            manager.download_custom_repo(name)
+                        else:
+                            print("잘못된 선택입니다.")
+                    except ValueError:
+                        # 범위 또는 콤마 구분 입력 확인
+                        if "-" in repo_choice or "," in repo_choice:
+                            manager.download_custom_repo(repo_choice)
+                        # 이름으로 입력한 경우
+                        elif repo_choice in repos:
+                            manager.download_custom_repo(repo_choice)
+                        else:
+                            print(f"저장소 '{repo_choice}'를 찾을 수 없습니다.")
 
                 elif repo_choice == "0":
                     break
