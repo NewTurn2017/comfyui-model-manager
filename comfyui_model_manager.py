@@ -221,14 +221,12 @@ class ComfyUIModelManager:
                 snapshot_download(
                     repo_id=repo_id,
                     allow_patterns=patterns,
-                    local_dir=str(target_dir),
-                    progress_bar=False
+                    local_dir=str(target_dir)
                 )
             else:
                 snapshot_download(
                     repo_id=repo_id,
-                    local_dir=str(target_dir),
-                    progress_bar=False
+                    local_dir=str(target_dir)
                 )
             print(f"다운로드 완료: {target_dir}")
             return True
@@ -467,8 +465,7 @@ class ComfyUIModelManager:
                 snapshot_download(
                     repo_id=repo_id,
                     allow_patterns=patterns,
-                    local_dir=str(target_dir),
-                    progress_bar=False
+                    local_dir=str(target_dir)
                 )
                 print(f"다운로드 완료: {repo_name} → {target_dir}")
                 return True
@@ -478,7 +475,7 @@ class ComfyUIModelManager:
 
         # 병렬로 다운로드 실행
         results = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(repo_names))) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(2, len(repo_names))) as executor:
             future_to_repo = {executor.submit(
                 download_repo, repo_name): repo_name for repo_name in repo_names}
             for future in concurrent.futures.as_completed(future_to_repo):
