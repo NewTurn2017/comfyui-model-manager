@@ -93,6 +93,21 @@
         "repo_id": "ali-vilab/In-Context-LoRA",
         "patterns": ["visual-identity-design.safetensors"],
         "dir_type": "loras"
+      },
+      "kijai/flux-fp8": {
+        "repo_id": "kijai/flux-fp8",
+        "patterns": ["flux1-dev-fp8.safetensors"],
+        "dir_type": "unet"
+      },
+      "clip_l": {
+        "repo_id": "comfyanonymous/flux_text_encoders",
+        "patterns": ["clip_l.safetensors"],
+        "dir_type": "clip"
+      },
+      "t5xxl_fp8_e4m3fn": {
+        "repo_id": "comfyanonymous/flux_text_encoders",
+        "patterns": ["t5xxl_fp8_e4m3fn.safetensors"],
+        "dir_type": "clip"
       }
     }
   }
