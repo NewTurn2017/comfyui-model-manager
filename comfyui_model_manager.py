@@ -35,7 +35,25 @@ MODEL_DIRS = {
     "pulid": "pulid",
     "embeddings": "embeddings",
     "hypernetworks": "hypernetworks",
-    "animatediff_models": "animatediff_models"
+    "animatediff_models": "animatediff_models",
+    "inpaint": "inpaint",
+    "animatediff_motion_lora": "animatediff_motion_lora",
+    "annotator": "annotator",
+    "configs": "configs",
+    "detection": "detection",
+    "diffusers": "diffusers",
+    "diffusion_models": "diffusion_models",
+    "facerestore_models": "facerestore_models",
+    "gligen": "gligen",
+    "insightface": "insightface",
+    "inisghtface": "inisghtface",
+    "ipadapter": "ipadapter",
+    "nsfw_detector": "nsfw_detector",
+    "onnx": "onnx",
+    "photomaker": "photomaker",
+    "reactor": "reactor",
+    "sams": "sams",
+    "vae_approx": "vae_approx"
 }
 
 # Civitai 모델 타입 매핑
