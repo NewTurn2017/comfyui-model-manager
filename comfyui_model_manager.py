@@ -24,7 +24,10 @@ DEFAULT_CONFIG = {
     "download_retries": 3,  # 다운로드 재시도 횟수
     "download_timeout": 120,  # 다운로드 타임아웃 시간(초)
     "concurrent_downloads": 4,  # 동시 다운로드 수
-    "controlnet_subdir": "1.5"  # ControlNet 모델 하위 디렉토리
+    "controlnet_subdir": "1.5",  # ControlNet 모델 하위 디렉토리
+    "use_hf_transfer": True,  # hf_transfer 사용 여부
+    "hf_transfer_chunk_size": 10485760,  # hf_transfer 청크 크기 (10MB)
+    "hf_parallel_requests": 0  # hf_transfer 병렬 요청 수 (0=자동)
 }
 
 # 모델 디렉토리 구조
@@ -124,8 +127,10 @@ class DownloadManager:
         if 'huggingface.co' in url:
             try:
                 import hf_transfer
-                use_hf_transfer = True
-                print(f"hf_transfer를 사용하여 다운로드합니다: {filename}")
+                # hf_transfer 직접 사용은 인증 문제가 발생하므로 비활성화
+                # use_hf_transfer = True
+                # print(f"hf_transfer를 사용하여 다운로드합니다: {filename}")
+                print(f"HuggingFace 모델 다운로드: {filename}")
             except ImportError:
                 print("hf_transfer를 찾을 수 없습니다. 일반 다운로드를 사용합니다.")
 
@@ -142,9 +147,9 @@ class DownloadManager:
 
         for attempt in range(self.retries + 1):
             try:
-                # hf_transfer 사용 설정 추가
-                if use_hf_transfer:
-                    headers['Authorization'] = 'Bearer hf_transfer'
+                # hf_transfer 사용 설정 추가 (인증 문제로 인해 비활성화)
+                # if use_hf_transfer:
+                #     headers['Authorization'] = 'Bearer hf_transfer'
 
                 response = requests.get(
                     url, headers=headers, stream=True, timeout=self.timeout)
@@ -364,6 +369,27 @@ class ComfyUIModelManager:
                              "requests>=2.25.0",
                              "tqdm>=4.66.0"]
 
+        # hf_transfer 사용 설정 시 확인
+        if self.config.get("use_hf_transfer", True):
+            print("고속 다운로드 기능(hf_transfer)이 활성화되어 있습니다.")
+            print("설치 여부를 확인 중...")
+            try:
+                import hf_transfer
+                print("hf_transfer가 이미 설치되어 있습니다.")
+            except ImportError:
+                print("hf_transfer를 설치합니다...")
+                try:
+                    subprocess.check_call(
+                        [sys.executable, "-m", "pip", "install", "hf_transfer"],
+                        stdout=subprocess.DEVNULL
+                    )
+                    print("hf_transfer 설치 완료")
+                except Exception as e:
+                    print(f"hf_transfer 설치 실패: {e}")
+                    print("기본 다운로드 방식을 사용합니다.")
+                    self.config["use_hf_transfer"] = False
+                    self._save_config()
+
         for package in required_packages:
             try:
                 subprocess.check_call(
@@ -404,6 +430,9 @@ class ComfyUIModelManager:
         description = self.huggingface_descriptions.get(model_id, "설명 없음")
         print(f"다운로드 중: {description} (repo: {repo_id})")
 
+        # hf_transfer 설정 활성화 (환경변수 설정)
+        self._setup_hf_transfer_env()
+
         try:
             # 저장소 정보 확인
             try:
@@ -439,6 +468,30 @@ class ComfyUIModelManager:
             except Exception as direct_e:
                 print(f"직접 다운로드도 실패: {direct_e}")
                 return False
+
+    def _setup_hf_transfer_env(self):
+        """hf_transfer 환경 설정"""
+        import os
+
+        # hf_transfer 기능 사용 설정
+        if self.config.get("use_hf_transfer", True):
+            os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+
+            # 추가 성능 튜닝 설정
+            chunk_size = self.config.get(
+                "hf_transfer_chunk_size", 10485760)  # 기본값: 10MB
+            os.environ["HF_TRANSFER_CHUNK_SIZE"] = str(chunk_size)
+
+            parallel = self.config.get("hf_parallel_requests", 0)  # 기본값: 자동
+            if parallel > 0:
+                os.environ["HF_HUB_DOWNLOAD_REQUESTS_PER_SECOND"] = str(
+                    parallel)
+
+            print("hf_transfer 고속 다운로드 기능이 활성화되었습니다.")
+        else:
+            # 비활성화
+            os.environ.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
+            print("일반 다운로드 방식을 사용합니다.")
 
     def _direct_download_from_huggingface(self, repo_id: str, patterns: List[str], target_dir: Path) -> bool:
         """HuggingFace API를 통해 직접 파일을 다운로드합니다."""
@@ -682,6 +735,9 @@ class ComfyUIModelManager:
         for repo_name in repo_names:
             repo = self.config["custom_repos"][repo_name]
             print(f"- {repo_name} (Repo ID: {repo['repo_id']})")
+
+        # hf_transfer 환경 설정
+        self._setup_hf_transfer_env()
 
         # 병렬 다운로드 함수 정의
         def download_repo(repo_name):
@@ -945,7 +1001,7 @@ class ComfyUIModelManager:
             print(f"일괄 다운로드 시작: {len(downloads)}개 항목")
             results = self.download_manager.download_files(
                 downloads,
-                max_workers=self.config.get("concurrent_downloads", 2)
+                max_workers=self.config.get("concurrent_downloads", 4)
             )
 
             success_count = sum(1 for r in results if r is not None)
@@ -963,16 +1019,18 @@ class ComfyUIModelManager:
             # 인터랙티브 모드로 모델 선택
             self.list_controlnet_models()
             print("\n다운로드할 ControlNet 모델을 선택하세요.")
-            print("1. 모든 모델 다운로드")
-            print("2. 선택한 모델만 다운로드")
-            print("3. HuggingFace API로 직접 다운로드 (더 빠름)")
+            print("1. HuggingFace API로 직접 다운로드 (권장 - 더 빠름)")
+            print("2. 모든 모델 다운로드 (일반 방식)")
+            print("3. 선택한 모델만 다운로드 (일반 방식)")
             print("0. 취소")
 
             choice = input("\n선택: ")
 
             if choice == "1":
-                select_all = True
+                return self._download_controlnet_direct()
             elif choice == "2":
+                select_all = True
+            elif choice == "3":
                 indices_input = input("다운로드할 모델 번호 (쉼표로 구분, 예: 0,1,2): ")
                 try:
                     selected_indices = [int(idx.strip())
@@ -980,8 +1038,6 @@ class ComfyUIModelManager:
                 except ValueError:
                     print("올바른 숫자를 입력하세요.")
                     return False
-            elif choice == "3":
-                return self._download_controlnet_direct()
             else:
                 print("다운로드가 취소되었습니다.")
                 return False
@@ -1018,10 +1074,19 @@ class ComfyUIModelManager:
             print("다운로드할 모델이 없습니다.")
             return False
 
+        # 인증 오류가 발생할 가능성이 있으므로 사용자에게 경고
+        print("\n참고: 일반 다운로드 방식에서 인증 오류가 발생할 수 있습니다.")
+        print("인증 오류가 발생하면 '1. HuggingFace API로 직접 다운로드' 옵션을 사용하세요.")
+        print("계속하시겠습니까? (y/n)")
+
+        if input().lower() != 'y':
+            print("다운로드를 취소합니다. 대신 직접 다운로드 방식을 시도합니다.")
+            return self._download_controlnet_direct()
+
         # 다운로드 실행
         results = self.download_manager.download_files(
             urls_to_download,
-            max_workers=self.config.get("concurrent_downloads", 2)
+            max_workers=self.config.get("concurrent_downloads", 4)
         )
 
         # 결과 확인
@@ -1029,16 +1094,34 @@ class ComfyUIModelManager:
         print(
             f"\nControlNet 모델 다운로드 결과: {success_count}/{len(urls_to_download)} 성공")
 
+        if success_count < len(urls_to_download):
+            print("\n일부 모델 다운로드에 실패했습니다.")
+            print("직접 다운로드 방식으로 실패한 모델을 다운로드하시겠습니까? (y/n)")
+            if input().lower() == 'y':
+                print("직접 다운로드 방식으로 전환합니다...")
+                return self._download_controlnet_direct()
+
         return success_count > 0
 
     def _download_controlnet_direct(self):
         """HuggingFace API를 통해 직접 ControlNet 모델을 다운로드합니다 (더 빠름)."""
         try:
-            from huggingface_hub import hf_hub_download
+            from huggingface_hub import hf_hub_download, login
         except ImportError:
             print("huggingface_hub 패키지가 설치되어 있지 않습니다.")
             self._ensure_dependencies()
-            from huggingface_hub import hf_hub_download
+            from huggingface_hub import hf_hub_download, login
+
+        # HuggingFace에 로그인 시도 (토큰이 있는 경우)
+        try:
+            # 로그인 시도 (자격 증명이 이미 있는 경우 사용)
+            login(token=None, add_to_git_credential=False, write_permission=False)
+            print("HuggingFace에 로그인되었습니다.")
+        except Exception as e:
+            print("HuggingFace 로그인 없이 계속합니다 (인증 없이도 다운로드 가능).")
+
+        # hf_transfer 환경 설정
+        self._setup_hf_transfer_env()
 
         # ControlNet 모델 저장 디렉토리 설정 (하위 디렉토리 포함)
         controlnet_base_dir = self.base_path / MODEL_DIRS["controlnet"]
@@ -1092,6 +1175,11 @@ class ComfyUIModelManager:
 
         print(f"\n{len(models_to_download)}개 ControlNet 모델을 다운로드합니다...")
 
+        # hf_transfer 사용 시 정보 표시
+        if self.config.get("use_hf_transfer", True):
+            print("고속 다운로드 기능(hf_transfer)을 사용하여 다운로드합니다.")
+            print("이 방식은 일반 다운로드보다 최대 100배까지 빠를 수 있습니다.")
+
         # 병렬 다운로드 준비
         repo_id = "lllyasviel/ControlNet-v1-1"
         max_workers = self.config.get("concurrent_downloads", 4)
@@ -1100,18 +1188,36 @@ class ComfyUIModelManager:
         def download_model(filename):
             try:
                 print(f"다운로드 시작: {filename}")
+                # 주요 인자 설정 (안정적인 다운로드를 위한 옵션 추가)
                 output_path = hf_hub_download(
                     repo_id=repo_id,
                     filename=filename,
                     local_dir=str(controlnet_dir),
                     local_dir_use_symlinks=False,
                     resume_download=True,
-                    force_download=False
+                    force_download=False,
+                    proxies=None,
+                    etag_timeout=100,
+                    token=None  # 익명 다운로드 (대부분의 모델이 공개되어 있음)
                 )
                 print(f"다운로드 완료: {filename}")
                 return output_path
             except Exception as e:
                 print(f"다운로드 실패: {filename} - {e}")
+                # 일반 다운로드 방식으로 대체 시도
+                try:
+                    print(f"일반 다운로드 방식으로 재시도 중: {filename}")
+                    url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
+                    result = self.download_manager.download_file(
+                        url=url,
+                        path=controlnet_dir,
+                        filename=filename
+                    )
+                    if result:
+                        print(f"일반 방식으로 다운로드 성공: {filename}")
+                        return result
+                except Exception as fallback_e:
+                    print(f"모든 다운로드 방식 실패: {filename} - {fallback_e}")
                 return None
 
         # 병렬 다운로드 실행
@@ -1313,8 +1419,10 @@ def main():
         elif args.list:
             manager.list_controlnet_models()
         else:
-            print(
-                "controlnet --all, controlnet --models INDEXES 또는 controlnet --list 명령을 사용하세요.")
+            # 기본적으로 직접 다운로드 방식을 사용
+            print("ControlNet 모델 다운로드를 시작합니다 (직접 다운로드 방식)...")
+            manager._download_controlnet_direct()
+            # print("controlnet --all, controlnet --models INDEXES 또는 controlnet --list 명령을 사용하세요.")
 
     elif args.command == "verify":
         manager.verify_models()
@@ -1463,6 +1571,7 @@ def show_menu(manager):
                 print("4: 다운로드 재시도 횟수 설정")
                 print("5: 다운로드 타임아웃 설정")
                 print("6: ControlNet 하위 디렉토리 설정")
+                print("7: hf_transfer 설정 (고속 다운로드)")
                 print("0: 뒤로 가기")
 
                 config_choice = input("\n선택: ")
@@ -1492,6 +1601,28 @@ def show_menu(manager):
                     if not subdir:
                         subdir = "1.5"
                     manager.update_config("controlnet_subdir", subdir)
+
+                elif config_choice == "7":
+                    print("\n=== hf_transfer 고속 다운로드 설정 ===")
+                    use_hf = input("hf_transfer 사용 (y/n, 기본값: y): ").lower()
+                    if use_hf in ["y", "yes", ""]:
+                        manager.update_config("use_hf_transfer", "True")
+                    else:
+                        manager.update_config("use_hf_transfer", "False")
+
+                    if use_hf in ["y", "yes", ""]:
+                        chunk_size = input("청크 크기 (MB, 기본값: 10): ")
+                        if chunk_size and chunk_size.isdigit():
+                            chunk_size_bytes = int(chunk_size) * 1024 * 1024
+                            manager.update_config(
+                                "hf_transfer_chunk_size", str(chunk_size_bytes))
+
+                        parallel = input("병렬 요청 수 (0=자동, 기본값: 0): ")
+                        if parallel and parallel.isdigit():
+                            manager.update_config(
+                                "hf_parallel_requests", parallel)
+
+                    print("hf_transfer 설정이 업데이트되었습니다.")
 
                 elif config_choice == "0":
                     break
