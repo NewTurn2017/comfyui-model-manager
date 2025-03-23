@@ -23,7 +23,8 @@ DEFAULT_CONFIG = {
     "custom_repos": {},  # 사용자 정의 저장소
     "download_retries": 3,  # 다운로드 재시도 횟수
     "download_timeout": 120,  # 다운로드 타임아웃 시간(초)
-    "concurrent_downloads": 2  # 동시 다운로드 수
+    "concurrent_downloads": 2,  # 동시 다운로드 수
+    "controlnet_subdir": "1.5"  # ControlNet 모델 하위 디렉토리
 }
 
 # 모델 디렉토리 구조
@@ -222,6 +223,24 @@ class ComfyUIModelManager:
 
         # 다운로드 관리자 초기화
         self.download_manager = DownloadManager(self.config)
+
+        # ControlNet 모델 URL 목록 초기화
+        self.controlnet_urls = [
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11e_sd15_ip2p.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11e_sd15_shuffle.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11f1e_sd15_tile.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11f1p_sd15_depth.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_canny.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_inpaint.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_lineart.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_mlsd.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_normalbae.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_openpose.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_scribble.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_seg.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_softedge.pth",
+            "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15s2_lineart_anime.pth"
+        ]
 
     def _load_config(self) -> Dict[str, Any]:
         """설정 파일을 로드하거나 기본 설정을 사용합니다."""
@@ -920,6 +939,98 @@ class ComfyUIModelManager:
             print(f"일괄 다운로드 오류: {e}")
             return False
 
+    def download_controlnet_models(self, select_all: bool = False, selected_indices: List[int] = None):
+        """ControlNet 모델을 다운로드합니다."""
+        if not select_all and not selected_indices:
+            # 인터랙티브 모드로 모델 선택
+            self.list_controlnet_models()
+            print("\n다운로드할 ControlNet 모델을 선택하세요.")
+            print("1. 모든 모델 다운로드")
+            print("2. 선택한 모델만 다운로드")
+            print("0. 취소")
+
+            choice = input("\n선택: ")
+
+            if choice == "1":
+                select_all = True
+            elif choice == "2":
+                indices_input = input("다운로드할 모델 번호 (쉼표로 구분, 예: 0,1,2): ")
+                try:
+                    selected_indices = [int(idx.strip())
+                                        for idx in indices_input.split(",")]
+                except ValueError:
+                    print("올바른 숫자를 입력하세요.")
+                    return False
+            else:
+                print("다운로드가 취소되었습니다.")
+                return False
+
+        # ControlNet 모델 저장 디렉토리 설정 (하위 디렉토리 포함)
+        controlnet_base_dir = self.base_path / MODEL_DIRS["controlnet"]
+        subdir = self.config.get("controlnet_subdir", "1.5")
+        controlnet_dir = controlnet_base_dir / subdir
+        os.makedirs(controlnet_dir, exist_ok=True)
+
+        print(f"ControlNet 모델 저장 경로: {controlnet_dir}")
+
+        # 다운로드할 URL 목록 생성
+        urls_to_download = []
+
+        if select_all:
+            for url in self.controlnet_urls:
+                filename = os.path.basename(url)
+                urls_to_download.append((url, controlnet_dir, filename))
+            print(
+                f"모든 ControlNet 모델 ({len(self.controlnet_urls)}개) 다운로드를 시작합니다.")
+        else:
+            for idx in selected_indices:
+                if 0 <= idx < len(self.controlnet_urls):
+                    url = self.controlnet_urls[idx]
+                    filename = os.path.basename(url)
+                    urls_to_download.append((url, controlnet_dir, filename))
+                else:
+                    print(f"잘못된 인덱스: {idx}")
+
+            print(f"선택한 ControlNet 모델 ({len(urls_to_download)}개) 다운로드를 시작합니다.")
+
+        if not urls_to_download:
+            print("다운로드할 모델이 없습니다.")
+            return False
+
+        # 다운로드 실행
+        results = self.download_manager.download_files(
+            urls_to_download,
+            max_workers=self.config.get("concurrent_downloads", 2)
+        )
+
+        # 결과 확인
+        success_count = sum(1 for r in results if r is not None)
+        print(
+            f"\nControlNet 모델 다운로드 결과: {success_count}/{len(urls_to_download)} 성공")
+
+        return success_count > 0
+
+    def list_controlnet_models(self):
+        """사용 가능한 ControlNet 모델 목록을 표시합니다."""
+        print("\n=== 사용 가능한 ControlNet 모델 목록 ===")
+
+        # ControlNet 모델 디렉토리 경로 계산
+        controlnet_base_dir = self.base_path / MODEL_DIRS["controlnet"]
+        subdir = self.config.get("controlnet_subdir", "1.5")
+        controlnet_dir = controlnet_base_dir / subdir
+
+        for idx, url in enumerate(self.controlnet_urls):
+            filename = os.path.basename(url)
+            model_name = filename.replace('control_', '').replace('.pth', '')
+
+            # 이미 다운로드된 모델인지 확인
+            model_path = controlnet_dir / filename
+            status = "[설치됨]" if model_path.exists() else "[미설치]"
+
+            print(f"{idx}: {model_name} {status} - {filename}")
+
+        return True
+
 
 def parse_args():
     """명령줄 인자를 파싱합니다."""
@@ -971,6 +1082,16 @@ def parse_args():
     batch_parser = subparsers.add_parser("batch", help="일괄 다운로드")
     batch_parser.add_argument(
         "--file", type=str, required=True, help="다운로드 목록 파일")
+
+    # ControlNet 모델 다운로드 명령
+    controlnet_parser = subparsers.add_parser(
+        "controlnet", help="ControlNet 모델 다운로드")
+    controlnet_parser.add_argument(
+        "--all", action="store_true", help="모든 ControlNet 모델 다운로드")
+    controlnet_parser.add_argument(
+        "--models", type=str, help="다운로드할 모델 인덱스 (쉼표로 구분, 예: 0,1,2)")
+    controlnet_parser.add_argument(
+        "--list", action="store_true", help="사용 가능한 ControlNet 모델 목록 표시")
 
     # 모델 검증 명령
     verify_parser = subparsers.add_parser("verify", help="모델 무결성 검증")
@@ -1053,6 +1174,19 @@ def main():
         else:
             print("다운로드 목록 파일을 제공해야 합니다.")
 
+    elif args.command == "controlnet":
+        if args.all:
+            manager.download_controlnet_models(select_all=True)
+        elif args.models:
+            selected_indices = [int(idx) for idx in args.models.split(',')]
+            manager.download_controlnet_models(
+                selected_indices=selected_indices)
+        elif args.list:
+            manager.list_controlnet_models()
+        else:
+            print(
+                "controlnet --all, controlnet --models INDEXES 또는 controlnet --list 명령을 사용하세요.")
+
     elif args.command == "verify":
         manager.verify_models()
 
@@ -1072,7 +1206,8 @@ def show_menu(manager):
         print("5: 설정 관리")
         print("6: URL에서 직접 다운로드")
         print("7: 일괄 다운로드")
-        print("8: 모델 무결성 검증")
+        print("8: ControlNet 모델 다운로드")
+        print("9: 모델 무결성 검증")
         print("0: 종료")
 
         choice = input("\n선택: ")
@@ -1198,6 +1333,7 @@ def show_menu(manager):
                 print("3: 동시 다운로드 수 설정")
                 print("4: 다운로드 재시도 횟수 설정")
                 print("5: 다운로드 타임아웃 설정")
+                print("6: ControlNet 하위 디렉토리 설정")
                 print("0: 뒤로 가기")
 
                 config_choice = input("\n선택: ")
@@ -1221,6 +1357,12 @@ def show_menu(manager):
                 elif config_choice == "5":
                     timeout = input("다운로드 타임아웃 (초): ")
                     manager.update_config("download_timeout", timeout)
+
+                elif config_choice == "6":
+                    subdir = input("ControlNet 하위 디렉토리 (기본값: 1.5): ")
+                    if not subdir:
+                        subdir = "1.5"
+                    manager.update_config("controlnet_subdir", subdir)
 
                 elif config_choice == "0":
                     break
@@ -1256,6 +1398,9 @@ def show_menu(manager):
             manager.batch_download(file_path)
 
         elif choice == "8":
+            manager.download_controlnet_models()
+
+        elif choice == "9":
             manager.verify_models()
 
         elif choice == "0":
