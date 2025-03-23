@@ -1,0 +1,16 @@
+# ComfyUI 모델 다운로드 목록 예제
+# 형식: URL,디렉토리_유형[,파일명]
+
+# 체크포인트 모델
+https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0_0.9vae.safetensors,checkpoints,sd_xl_base_1.0.safetensors
+https://huggingface.co/SG161222/Realistic_Vision_V6.0_B1_noVAE/resolve/main/Realistic_Vision_V6.0_NV_B1.safetensors,checkpoints,Realistic_Vision_6.0.safetensors
+
+# ControlNet 모델
+https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_canny.pth,controlnet
+https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_openpose.pth,controlnet
+
+# LoRA 모델 (파일명 자동 추출)
+https://civitai.com/api/download/models/12345,loras
+
+# VAE 모델
+https://huggingface.co/stabilityai/sd-vae-ft-mse-original/resolve/main/vae-ft-mse-840000-ema-pruned.safetensors,vae,stabilityai_vae.safetensors 

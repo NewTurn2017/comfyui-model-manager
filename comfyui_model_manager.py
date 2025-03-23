@@ -9,16 +9,21 @@ import json
 import argparse
 import subprocess
 import requests
+import time
 from pathlib import Path
 import shutil
 from typing import List, Dict, Union, Optional, Any, Tuple
 import concurrent.futures
+from tqdm import tqdm
 
 # 기본 설정
 DEFAULT_CONFIG = {
-    "base_path": "/workspace/ComfyUI/models",  # 기본 모델 경로
+    "base_path": "/home/elicer/ComfyUI/models",  # 기본 모델 경로
     "civitai_token": "",  # Civitai API 토큰
-    "custom_repos": {}  # 사용자 정의 저장소
+    "custom_repos": {},  # 사용자 정의 저장소
+    "download_retries": 3,  # 다운로드 재시도 횟수
+    "download_timeout": 120,  # 다운로드 타임아웃 시간(초)
+    "concurrent_downloads": 2  # 동시 다운로드 수
 }
 
 # 모델 디렉토리 구조
@@ -69,6 +74,142 @@ CIVITAI_TYPE_MAP = {
 }
 
 
+class DownloadManager:
+    """파일 다운로드를 관리하는 클래스"""
+
+    def __init__(self, config: Dict[str, Any]):
+        self.retries = config.get("download_retries", 3)
+        self.timeout = config.get("download_timeout", 120)
+        self.concurrent_downloads = config.get("concurrent_downloads", 2)
+
+    def download_file(self, url: str, path: Path, filename: Optional[str] = None) -> Optional[Path]:
+        """
+        파일을 다운로드하는 함수
+
+        Args:
+            url: 다운로드할 파일의 URL
+            path: 파일을 저장할 경로
+            filename: 저장할 파일명 (None이면 URL에서 추출)
+
+        Returns:
+            다운로드된 파일 경로 또는 실패 시 None
+        """
+        # 디렉토리가 없으면 생성
+        path.mkdir(parents=True, exist_ok=True)
+
+        # 파일명이 제공되지 않은 경우 URL에서 추출
+        if not filename:
+            response = requests.head(url, allow_redirects=True)
+            content_disposition = response.headers.get('content-disposition')
+            if content_disposition:
+                filename_match = re.search(
+                    r'filename="?([^"]+)"?', content_disposition)
+                if filename_match:
+                    filename = filename_match.group(1)
+
+            if not filename:
+                filename = os.path.basename(url)
+
+        file_path = path / filename
+        temp_path = file_path.with_suffix(file_path.suffix + '.part')
+
+        # 이미 완료된 파일이 있는지 확인
+        if file_path.exists():
+            print(f"파일이 이미 존재합니다: {file_path}")
+            return file_path
+
+        downloaded_size = 0
+        if temp_path.exists():
+            downloaded_size = temp_path.stat().st_size
+
+        headers = {}
+        if downloaded_size:
+            headers['Range'] = f"bytes={downloaded_size}-"
+
+        for attempt in range(self.retries + 1):
+            try:
+                response = requests.get(
+                    url, headers=headers, stream=True, timeout=self.timeout)
+                response.raise_for_status()
+
+                # 파일 크기 계산
+                total_size = downloaded_size
+                if 'content-length' in response.headers:
+                    total_size += int(response.headers.get('content-length', 0))
+
+                # 이어받기 모드로 파일 열기
+                write_mode = 'ab' if downloaded_size else 'wb'
+
+                with open(temp_path, write_mode) as file:
+                    with tqdm(
+                        desc=f"다운로드 중: {filename}",
+                        initial=downloaded_size,
+                        total=total_size,
+                        unit='B',
+                        unit_scale=True,
+                        unit_divisor=1024,
+                    ) as progress_bar:
+                        start_time = time.time()
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                file.write(chunk)
+                                progress_bar.update(len(chunk))
+
+                                # 속도 계산 및 표시
+                                elapsed = time.time() - start_time
+                                if elapsed > 0:
+                                    speed = progress_bar.n / elapsed / 1024  # KB/s
+                                    progress_bar.set_postfix(
+                                        {"속도": f"{speed:.2f} KB/s"})
+
+                # 다운로드 완료 후 파일 이름 변경
+                temp_path.rename(file_path)
+                print(f"다운로드 완료: {file_path}")
+                return file_path
+
+            except (requests.RequestException, IOError) as e:
+                if attempt < self.retries:
+                    wait_time = 2 ** attempt  # 지수 백오프
+                    print(
+                        f"다운로드 오류: {e}. {wait_time}초 후 재시도... ({attempt+1}/{self.retries})")
+                    time.sleep(wait_time)
+                else:
+                    print(f"다운로드 실패: {e}. 최대 재시도 횟수 초과.")
+                    return None
+
+        return None
+
+    def download_files(self, urls: List[Tuple[str, Path, Optional[str]]], max_workers: Optional[int] = None) -> List[Optional[Path]]:
+        """
+        여러 파일을 병렬로 다운로드
+
+        Args:
+            urls: (url, path, filename) 튜플의 리스트
+            max_workers: 최대 동시 다운로드 수
+
+        Returns:
+            다운로드된 파일 경로 리스트
+        """
+        if max_workers is None:
+            max_workers = self.concurrent_downloads
+
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(self.download_file, url, path, filename): (url, path, filename)
+                       for url, path, filename in urls}
+
+            for future in concurrent.futures.as_completed(futures):
+                url, path, filename = futures[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    print(f"다운로드 중 예외 발생: {e}")
+                    results.append(None)
+
+        return results
+
+
 class ComfyUIModelManager:
     def __init__(self):
         self.config = self._load_config()
@@ -78,6 +219,9 @@ class ComfyUIModelManager:
         self._load_huggingface_models()
         self._ensure_dependencies()
         self._ensure_directories_exist()
+
+        # 다운로드 관리자 초기화
+        self.download_manager = DownloadManager(self.config)
 
     def _load_config(self) -> Dict[str, Any]:
         """설정 파일을 로드하거나 기본 설정을 사용합니다."""
@@ -179,7 +323,9 @@ class ComfyUIModelManager:
     def _ensure_dependencies(self):
         """필요한 의존성을 설치합니다."""
         required_packages = ["huggingface_hub>=0.25.2",
-                             "hf_transfer>=0.1.8", "requests>=2.25.0"]
+                             "hf_transfer>=0.1.8",
+                             "requests>=2.25.0",
+                             "tqdm>=4.66.0"]
 
         for package in required_packages:
             try:
@@ -199,7 +345,12 @@ class ComfyUIModelManager:
 
     def download_huggingface_model(self, model_id: int):
         """HuggingFace에서 모델을 다운로드합니다."""
-        from huggingface_hub import snapshot_download
+        try:
+            from huggingface_hub import snapshot_download, model_info
+        except ImportError:
+            print("huggingface_hub 패키지가 설치되어 있지 않습니다.")
+            self._ensure_dependencies()
+            from huggingface_hub import snapshot_download, model_info
 
         if not self.huggingface_models:
             print("오류: HuggingFace 모델 데이터가 로드되지 않았습니다.")
@@ -217,21 +368,80 @@ class ComfyUIModelManager:
         print(f"다운로드 중: {description} (repo: {repo_id})")
 
         try:
+            # 저장소 정보 확인
+            try:
+                repo_info = model_info(repo_id)
+                print(
+                    f"모델 정보: {repo_info.modelId} (마지막 수정: {repo_info.lastModified})")
+            except Exception as e:
+                print(f"모델 정보 조회 실패: {e}")
+
+            # 스냅샷 다운로드 사용
             if patterns:
                 snapshot_download(
                     repo_id=repo_id,
                     allow_patterns=patterns,
-                    local_dir=str(target_dir)
+                    local_dir=str(target_dir),
+                    tqdm_class=tqdm
                 )
             else:
                 snapshot_download(
                     repo_id=repo_id,
-                    local_dir=str(target_dir)
+                    local_dir=str(target_dir),
+                    tqdm_class=tqdm
                 )
             print(f"다운로드 완료: {target_dir}")
             return True
         except Exception as e:
             print(f"다운로드 오류: {e}")
+
+            # 직접 다운로드 시도
+            try:
+                print("스냅샷 다운로드 실패, 직접 다운로드 시도 중...")
+                return self._direct_download_from_huggingface(repo_id, patterns, target_dir)
+            except Exception as direct_e:
+                print(f"직접 다운로드도 실패: {direct_e}")
+                return False
+
+    def _direct_download_from_huggingface(self, repo_id: str, patterns: List[str], target_dir: Path) -> bool:
+        """HuggingFace API를 통해 직접 파일을 다운로드합니다."""
+        from huggingface_hub import list_repo_files, hf_hub_download
+
+        try:
+            # 저장소의 모든 파일 목록 가져오기
+            all_files = list_repo_files(repo_id)
+            files_to_download = []
+
+            # 패턴이 있으면 필터링
+            if patterns:
+                for pattern in patterns:
+                    import fnmatch
+                    files_to_download.extend(
+                        [f for f in all_files if fnmatch.fnmatch(f, pattern)])
+            else:
+                files_to_download = all_files
+
+            if not files_to_download:
+                print(f"다운로드할 파일을 찾을 수 없습니다: {repo_id}")
+                return False
+
+            print(f"다운로드할 파일: {len(files_to_download)}개")
+
+            # 파일 다운로드
+            for file_path in tqdm(files_to_download, desc=f"다운로드 중: {repo_id}"):
+                try:
+                    hf_hub_download(
+                        repo_id=repo_id,
+                        filename=file_path,
+                        local_dir=str(target_dir)
+                    )
+                except Exception as e:
+                    print(f"파일 다운로드 실패 ({file_path}): {e}")
+
+            print(f"다운로드 완료: {target_dir}")
+            return True
+        except Exception as e:
+            print(f"직접 다운로드 오류: {e}")
             return False
 
     def download_civitai_model(self, url: str):
@@ -265,7 +475,23 @@ class ComfyUIModelManager:
         dir_type = CIVITAI_TYPE_MAP.get(model_type, 'checkpoints')
         model_path = self.base_path / MODEL_DIRS[dir_type]
 
-        return self._download_file(version_id, model_path, info['name'], info['model_name'])
+        # 다운로드 URL 생성
+        download_url = f"https://civitai.com/api/download/models/{version_id}"
+
+        # 다운로드 수행
+        result = self.download_manager.download_file(
+            url=download_url,
+            path=model_path,
+            filename=info['name']
+        )
+
+        if result:
+            print(f"모델 다운로드 완료: {info['model_name']} - {info['name']}")
+            print(f"저장 위치: {result}")
+            return True
+        else:
+            print(f"모델 다운로드 실패: {info['model_name']}")
+            return False
 
     def _extract_ids_from_url(self, url: str) -> Tuple[Optional[str], Optional[str]]:
         """URL에서 modelVersionId와 modelId를 추출합니다."""
@@ -319,38 +545,6 @@ class ComfyUIModelManager:
             print(f"모델 정보 가져오기 오류: {e}")
             return None
 
-    def _download_file(self, version_id: str, path: Path, filename: str, model_name: str) -> bool:
-        """Civitai API를 사용하여 파일을 다운로드합니다."""
-        path.mkdir(parents=True, exist_ok=True)
-        file_path = path / filename
-        download_url = f"https://civitai.com/api/download/models/{version_id}"
-
-        try:
-            with requests.get(
-                download_url,
-                headers={
-                    'Authorization': f'Bearer {self.config["civitai_token"]}'},
-                stream=True
-            ) as r:
-                r.raise_for_status()
-                total = int(r.headers.get('content-length', 0))
-                print(f"다운로드 중: {model_name} - {filename}")
-
-                with open(file_path, 'wb') as f:
-                    downloaded = 0
-                    for chunk in r.iter_content(chunk_size=8192):
-                        downloaded += len(chunk)
-                        f.write(chunk)
-                        progress = (downloaded / total) * 100
-                        print(
-                            f"\r진행률: {progress:.1f}% ({downloaded}/{total} 바이트)", end='')
-
-            print(f"\n저장 완료: {file_path}")
-            return True
-        except Exception as e:
-            print(f"\n다운로드 실패: {e}")
-            return False
-
     def add_custom_repo(self, name: str, repo_id: str, patterns: Union[str, List[str]], dir_type: str):
         """사용자 정의 저장소를 추가합니다."""
         if dir_type not in MODEL_DIRS:
@@ -383,7 +577,12 @@ class ComfyUIModelManager:
 
     def download_custom_repo(self, name: str):
         """사용자 정의 저장소에서 모델을 다운로드합니다."""
-        from huggingface_hub import snapshot_download
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError:
+            print("huggingface_hub 패키지가 설치되어 있지 않습니다.")
+            self._ensure_dependencies()
+            from huggingface_hub import snapshot_download
 
         # 다운로드할 저장소 목록을 해석
         repo_names = []
@@ -465,17 +664,25 @@ class ComfyUIModelManager:
                 snapshot_download(
                     repo_id=repo_id,
                     allow_patterns=patterns,
-                    local_dir=str(target_dir)
+                    local_dir=str(target_dir),
+                    tqdm_class=tqdm
                 )
                 print(f"다운로드 완료: {repo_name} → {target_dir}")
                 return True
             except Exception as e:
-                print(f"다운로드 오류 ({repo_name}): {e}")
-                return False
+                print(f"스냅샷 다운로드 오류 ({repo_name}): {e}")
+                try:
+                    print(f"직접 다운로드 시도 중...")
+                    return self._direct_download_from_huggingface(repo_id, patterns, target_dir)
+                except Exception as direct_e:
+                    print(f"직접 다운로드 실패: {direct_e}")
+                    return False
 
         # 병렬로 다운로드 실행
+        max_workers = min(self.config.get(
+            "concurrent_downloads", 2), len(repo_names))
         results = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(2, len(repo_names))) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_repo = {executor.submit(
                 download_repo, repo_name): repo_name for repo_name in repo_names}
             for future in concurrent.futures.as_completed(future_to_repo):
@@ -495,15 +702,81 @@ class ComfyUIModelManager:
 
     def list_models(self):
         """모든 모델 디렉토리의 모델을 나열합니다."""
+        model_counts = {}
+        total_size = 0
+
         for dir_type, dir_name in MODEL_DIRS.items():
             dir_path = self.base_path / dir_name
             if dir_path.exists():
                 files = list(dir_path.glob('*.*'))
                 if files:
-                    print(f"\n[{dir_type}] - {len(files)}개 파일:")
-                    for file in files:
-                        size_mb = file.stat().st_size / (1024 * 1024)
-                        print(f"  - {file.name} ({size_mb:.2f} MB)")
+                    model_counts[dir_type] = {
+                        'count': len(files),
+                        # MB
+                        'size': sum(file.stat().st_size for file in files) / (1024 * 1024)
+                    }
+                    total_size += model_counts[dir_type]['size']
+
+        # 결과 출력
+        print("\n=== 설치된 모델 목록 ===")
+        for dir_type, info in sorted(model_counts.items(), key=lambda x: x[1]['count'], reverse=True):
+            print(f"[{dir_type}] - {info['count']}개 파일 ({info['size']:.2f} MB)")
+
+        print(
+            f"\n총계: {sum(info['count'] for info in model_counts.values())}개 파일 ({total_size:.2f} MB)")
+
+        # 세부 목록 표시 여부 확인
+        show_details = input("\n세부 목록을 보시겠습니까? (y/n): ").lower() == 'y'
+        if show_details:
+            for dir_type, dir_name in MODEL_DIRS.items():
+                dir_path = self.base_path / dir_name
+                if dir_path.exists():
+                    files = list(dir_path.glob('*.*'))
+                    if files:
+                        print(f"\n[{dir_type}] - {len(files)}개 파일:")
+                        for file in files:
+                            size_mb = file.stat().st_size / (1024 * 1024)
+                            print(f"  - {file.name} ({size_mb:.2f} MB)")
+
+    def verify_models(self):
+        """모델 파일의 무결성을 검증합니다."""
+        print("\n모델 무결성 검증 중...")
+
+        incomplete_files = []
+        for dir_type, dir_name in MODEL_DIRS.items():
+            dir_path = self.base_path / dir_name
+            if dir_path.exists():
+                part_files = list(dir_path.glob('*.part'))
+                if part_files:
+                    for file in part_files:
+                        incomplete_files.append(file)
+                        print(f"미완료 다운로드 파일 발견: {file}")
+
+        if incomplete_files:
+            action = input(
+                "\n미완료 파일을 어떻게 처리하시겠습니까? (삭제: d, 완료: c, 무시: i): ").lower()
+
+            if action == 'd':
+                for file in incomplete_files:
+                    try:
+                        file.unlink()
+                        print(f"삭제됨: {file}")
+                    except Exception as e:
+                        print(f"삭제 실패: {file} - {e}")
+
+            elif action == 'c':
+                for file in incomplete_files:
+                    try:
+                        # 파일명에서 .part 제거
+                        complete_path = file.with_suffix('')
+                        file.rename(complete_path)
+                        print(f"완료 처리됨: {file} → {complete_path}")
+                    except Exception as e:
+                        print(f"완료 처리 실패: {file} - {e}")
+        else:
+            print("모든 파일이 완전한 상태입니다.")
+
+        return len(incomplete_files) == 0
 
     def update_config(self, key: str, value: str):
         """설정을 업데이트합니다."""
@@ -535,6 +808,33 @@ class ComfyUIModelManager:
                     except Exception as e:
                         print(f"모델 이동 오류: {e}")
                         return False
+        elif key == "concurrent_downloads":
+            try:
+                value = int(value)
+                if value < 1:
+                    print("동시 다운로드 수는 1 이상이어야 합니다.")
+                    return False
+            except ValueError:
+                print("동시 다운로드 수는 정수여야 합니다.")
+                return False
+        elif key == "download_retries":
+            try:
+                value = int(value)
+                if value < 0:
+                    print("재시도 횟수는 0 이상이어야 합니다.")
+                    return False
+            except ValueError:
+                print("재시도 횟수는 정수여야 합니다.")
+                return False
+        elif key == "download_timeout":
+            try:
+                value = int(value)
+                if value < 1:
+                    print("타임아웃 시간은 1 이상이어야 합니다.")
+                    return False
+            except ValueError:
+                print("타임아웃 시간은 정수여야 합니다.")
+                return False
 
         # 설정 업데이트
         self.config[key] = value
@@ -547,6 +847,78 @@ class ComfyUIModelManager:
 
         print(f"설정이 업데이트되었습니다: {key} = {value}")
         return True
+
+    def direct_download(self, url: str, dir_type: str, filename: Optional[str] = None):
+        """URL에서 직접 모델을 다운로드합니다."""
+        if dir_type not in MODEL_DIRS:
+            print(f"오류: 잘못된 디렉토리 유형 '{dir_type}'")
+            print(f"가능한 유형: {', '.join(MODEL_DIRS.keys())}")
+            return False
+
+        target_dir = self.base_path / MODEL_DIRS[dir_type]
+
+        result = self.download_manager.download_file(
+            url=url,
+            path=target_dir,
+            filename=filename
+        )
+
+        if result:
+            print(f"다운로드 완료: {result}")
+            return True
+        else:
+            print("다운로드 실패")
+            return False
+
+    def batch_download(self, urls_file: str):
+        """일괄 다운로드 기능을 제공합니다."""
+        try:
+            with open(urls_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            downloads = []
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+
+                parts = line.split(',')
+                if len(parts) < 2:
+                    print(f"잘못된 형식: {line}")
+                    continue
+
+                url = parts[0].strip()
+                dir_type = parts[1].strip()
+
+                filename = None
+                if len(parts) >= 3:
+                    filename = parts[2].strip()
+
+                if dir_type not in MODEL_DIRS:
+                    print(f"잘못된 디렉토리 유형: {dir_type} (행: {line})")
+                    continue
+
+                target_dir = self.base_path / MODEL_DIRS[dir_type]
+                downloads.append((url, target_dir, filename))
+
+            if not downloads:
+                print("다운로드할 항목이 없습니다.")
+                return False
+
+            print(f"일괄 다운로드 시작: {len(downloads)}개 항목")
+            results = self.download_manager.download_files(
+                downloads,
+                max_workers=self.config.get("concurrent_downloads", 2)
+            )
+
+            success_count = sum(1 for r in results if r is not None)
+            print(f"\n다운로드 결과: {success_count}/{len(downloads)} 성공")
+
+            return success_count > 0
+
+        except Exception as e:
+            print(f"일괄 다운로드 오류: {e}")
+            return False
 
 
 def parse_args():
@@ -587,6 +959,22 @@ def parse_args():
     # 모델 목록 명령
     list_parser = subparsers.add_parser("list", help="설치된 모델 나열")
 
+    # 직접 다운로드 명령
+    direct_parser = subparsers.add_parser("download", help="URL에서 직접 다운로드")
+    direct_parser.add_argument(
+        "--url", type=str, required=True, help="다운로드할 URL")
+    direct_parser.add_argument(
+        "--dir", type=str, required=True, help="저장할 디렉토리 유형")
+    direct_parser.add_argument("--filename", type=str, help="저장할 파일명")
+
+    # 일괄 다운로드 명령
+    batch_parser = subparsers.add_parser("batch", help="일괄 다운로드")
+    batch_parser.add_argument(
+        "--file", type=str, required=True, help="다운로드 목록 파일")
+
+    # 모델 검증 명령
+    verify_parser = subparsers.add_parser("verify", help="모델 무결성 검증")
+
     return parser.parse_args()
 
 
@@ -609,6 +997,10 @@ def main():
                             f"  - {name}: {repo['repo_id']} ({repo['dir_type']})")
                 else:
                     print(f"  {key}: {value}")
+        else:
+            print("사용 가능한 설정 옵션:")
+            for key, value in DEFAULT_CONFIG.items():
+                print(f"  {key}: {value} (기본값)")
 
     elif args.command == "huggingface":
         if args.list:
@@ -618,6 +1010,8 @@ def main():
                 print(f"{id}: {desc} (repo: {repo_id})")
         elif args.download:
             manager.download_huggingface_model(args.download)
+        else:
+            print("huggingface --list 또는 huggingface --download MODEL_ID 명령을 사용하세요.")
 
     elif args.command == "civitai":
         if args.url:
@@ -641,9 +1035,26 @@ def main():
                 print(f"  디렉토리: {repo['dir_type']}")
         elif args.download:
             manager.download_custom_repo(args.download)
+        else:
+            print("repo --list, repo --add, repo --remove 또는 repo --download 명령을 사용하세요.")
 
     elif args.command == "list":
         manager.list_models()
+
+    elif args.command == "download":
+        if args.url and args.dir:
+            manager.direct_download(args.url, args.dir, args.filename)
+        else:
+            print("URL과 디렉토리 유형을 제공해야 합니다.")
+
+    elif args.command == "batch":
+        if args.file:
+            manager.batch_download(args.file)
+        else:
+            print("다운로드 목록 파일을 제공해야 합니다.")
+
+    elif args.command == "verify":
+        manager.verify_models()
 
     else:
         # 인터랙티브 모드
@@ -659,6 +1070,9 @@ def show_menu(manager):
         print("3: 사용자 정의 저장소 관리")
         print("4: 설치된 모델 보기")
         print("5: 설정 관리")
+        print("6: URL에서 직접 다운로드")
+        print("7: 일괄 다운로드")
+        print("8: 모델 무결성 검증")
         print("0: 종료")
 
         choice = input("\n선택: ")
@@ -781,6 +1195,9 @@ def show_menu(manager):
 
                 print("\n1: 기본 경로 변경")
                 print("2: Civitai API 토큰 설정")
+                print("3: 동시 다운로드 수 설정")
+                print("4: 다운로드 재시도 횟수 설정")
+                print("5: 다운로드 타임아웃 설정")
                 print("0: 뒤로 가기")
 
                 config_choice = input("\n선택: ")
@@ -793,8 +1210,53 @@ def show_menu(manager):
                     token = input("Civitai API 토큰: ")
                     manager.update_config("civitai_token", token)
 
+                elif config_choice == "3":
+                    count = input("동시 다운로드 수: ")
+                    manager.update_config("concurrent_downloads", count)
+
+                elif config_choice == "4":
+                    retries = input("다운로드 재시도 횟수: ")
+                    manager.update_config("download_retries", retries)
+
+                elif config_choice == "5":
+                    timeout = input("다운로드 타임아웃 (초): ")
+                    manager.update_config("download_timeout", timeout)
+
                 elif config_choice == "0":
                     break
+
+        elif choice == "6":
+            url = input("다운로드할 URL: ")
+
+            print("저장할 디렉토리 유형을 선택하세요:")
+            dir_types = list(MODEL_DIRS.keys())
+            for idx, key in enumerate(dir_types, 1):
+                print(f"{idx}: {key}")
+
+            dir_choice = input("선택 (번호): ")
+            try:
+                dir_idx = int(dir_choice) - 1
+                if 0 <= dir_idx < len(dir_types):
+                    dir_type = dir_types[dir_idx]
+                    filename = input("저장할 파일명 (기본값: URL에서 추출): ")
+                    if not filename:
+                        filename = None
+                    manager.direct_download(url, dir_type, filename)
+                else:
+                    print("잘못된 선택입니다.")
+            except ValueError:
+                print("숫자를 입력해야 합니다.")
+
+        elif choice == "7":
+            file_path = input("다운로드 목록 파일 경로: ")
+            if not os.path.exists(file_path):
+                print(f"파일을 찾을 수 없습니다: {file_path}")
+                continue
+
+            manager.batch_download(file_path)
+
+        elif choice == "8":
+            manager.verify_models()
 
         elif choice == "0":
             break

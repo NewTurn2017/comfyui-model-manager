@@ -1,75 +1,155 @@
 # ComfyUI 모델 관리자
 
-ComfyUI 모델 관리자는 RunPod 및 기타 환경에서 ComfyUI에 필요한 모델을 쉽게 다운로드하고 관리할 수 있는 CLI 도구입니다.
+ComfyUI 모델 관리자는 HuggingFace와 Civitai에서 모델을 쉽게 다운로드하고 관리할 수 있는 CLI(Command Line Interface) 도구입니다.
 
-## 특징
+## 기능
 
-- HuggingFace와 Civitai에서 모델 다운로드
-- 사전 정의된 인기 모델 목록 (외부 JSON 파일에서 관리)
-- 사용자 정의 저장소 추가 기능
-- 설치된 모델 목록 보기
-- 모델 경로 및 기타 설정 관리
-- CLI와 인터랙티브 모드 모두 지원
+- HuggingFace에서 모델 다운로드
+- Civitai에서 모델 다운로드
+- 사용자 정의 저장소 관리
+- 모델 목록 보기 및 관리
+- 직접 URL에서 다운로드
+- 일괄 다운로드 기능
+- 모델 무결성 검증
+- 다운로드 진행률 및 속도 표시
+- 다운로드 재시도 및 오류 복구 기능
 
-## 설치
+## 설치 방법
 
-```bash
-# 저장소 클론
-git clone https://github.com/NewTurn2017/comfyui-model-manager.git
-cd comfyui-model-manager
-
-# 필요한 의존성 설치
-pip install huggingface_hub>=0.25.2 hf_transfer>=0.1.8 requests>=2.25.0
-```
-
-## 사용법
-
-### CLI 모드
+1. 이 저장소를 클론하거나 다운로드합니다.
+2. 필요한 패키지를 설치합니다:
 
 ```bash
-# 도움말 보기
-python comfyui_model_manager.py --help
-
-# HuggingFace 모델 목록 보기
-python comfyui_model_manager.py huggingface --list
-
-# HuggingFace 모델 다운로드
-python comfyui_model_manager.py huggingface --download 1
-
-# Civitai 모델 다운로드
-python comfyui_model_manager.py civitai --url "https://civitai.com/models/12345"
-
-# 사용자 정의 저장소 추가
-python comfyui_model_manager.py repo --add "내저장소" "username/repo" "*.safetensors" "checkpoints"
-
-# 사용자 정의 저장소에서 다운로드
-python comfyui_model_manager.py repo --download "내저장소"
-
-# 설치된 모델 목록 보기
-python comfyui_model_manager.py list
-
-# 설정 보기
-python comfyui_model_manager.py config --show
-
-# 설정 업데이트
-python comfyui_model_manager.py config --set base_path "/새로운/경로"
+pip install huggingface_hub requests tqdm
 ```
 
-### 인터랙티브 모드
+## 사용 방법
+
+### 명령행 인터페이스 (CLI)
+
+```bash
+python comfyui_model_manager.py [command] [options]
+```
+
+### 대화형 모드
+
+인자 없이 실행하면 대화형 메뉴가 표시됩니다:
 
 ```bash
 python comfyui_model_manager.py
 ```
 
-이것은 대화형 메뉴를 표시하여 다양한 작업을 수행할 수 있습니다.
+## 주요 명령어
 
-## 설정
+### 설정 관리
 
-설정은 `~/.comfyui_model_manager.json`에 저장됩니다. 다음 설정을 구성할 수 있습니다:
+```bash
+# 설정 보기
+python comfyui_model_manager.py config --show
 
-- `base_path`: 모델이 저장되는 기본 경로 (기본값: `/workspace/ComfyUI/models`)
-- `civitai_token`: Civitai API 토큰 (Civitai 모델을 다운로드하려면 필요)
-- `custom_repos`: 사용자 정의 저장소 목록
+# 설정 변경
+python comfyui_model_manager.py config --set base_path /path/to/models
+python comfyui_model_manager.py config --set civitai_token your_token
+python comfyui_model_manager.py config --set concurrent_downloads 3
+```
+
+### HuggingFace 모델 관리
+
+```bash
+# 사용 가능한 모델 목록 보기
+python comfyui_model_manager.py huggingface --list
+
+# 모델 다운로드
+python comfyui_model_manager.py huggingface --download MODEL_ID
+```
+
+### Civitai 모델 다운로드
+
+```bash
+# URL로 모델 다운로드
+python comfyui_model_manager.py civitai --url https://civitai.com/models/12345
+```
+
+### 사용자 정의 저장소 관리
+
+```bash
+# 저장소 목록 보기
+python comfyui_model_manager.py repo --list
+
+# 저장소 추가
+python comfyui_model_manager.py repo --add NAME REPO_ID "pattern1,pattern2" dir_type
+
+# 저장소 삭제
+python comfyui_model_manager.py repo --remove NAME
+
+# 저장소에서 다운로드
+python comfyui_model_manager.py repo --download NAME
+```
+
+### 직접 다운로드
+
+```bash
+# URL에서 직접 다운로드
+python comfyui_model_manager.py download --url URL --dir dir_type [--filename FILENAME]
+```
+
+### 일괄 다운로드
+
+```bash
+# 여러 파일 일괄 다운로드
+python comfyui_model_manager.py batch --file download_list.txt
+```
+
+`download_list.txt` 형식:
+
+```
+URL,dir_type[,filename]
+https://example.com/model1.safetensors,checkpoints,my_model.safetensors
+https://example.com/model2.safetensors,loras
+```
+
+### 모델 관리
+
+```bash
+# 설치된 모델 목록 보기
+python comfyui_model_manager.py list
+
+# 모델 무결성 검증
+python comfyui_model_manager.py verify
+```
+
+## 모델 디렉토리 구조
+
+모델은 기본 경로 아래의 해당 디렉토리에 저장됩니다:
+
+- `checkpoints`: 체크포인트 모델
+- `loras`: LoRA 모델
+- `vae`: VAE 모델
+- `controlnet`: ControlNet 모델
+- 기타 다양한 모델 유형 지원
+
+## 설정 옵션
+
+- `base_path`: 모델 저장 기본 경로
+- `civitai_token`: Civitai API 토큰
+- `download_retries`: 다운로드 실패 시 재시도 횟수
+- `download_timeout`: 다운로드 타임아웃 시간(초)
+- `concurrent_downloads`: 동시 다운로드 수
+
+## 에러 해결
+
+1. HuggingFace 다운로드 오류:
+
+   - `huggingface-cli login` 명령으로 로그인하여 인증합니다.
+   - 올바른 저장소 ID를 확인합니다.
+
+2. Civitai 다운로드 오류:
+
+   - Civitai API 토큰이 올바르게 설정되었는지 확인합니다.
+   - URL 형식이 올바른지 확인합니다.
+
+3. 다운로드 중단 문제:
+   - `verify` 명령을 사용하여 중단된 파일을 확인하고 복구합니다.
 
 ## 폴더 구조
 
