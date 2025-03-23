@@ -23,7 +23,7 @@ DEFAULT_CONFIG = {
     "custom_repos": {},  # 사용자 정의 저장소
     "download_retries": 3,  # 다운로드 재시도 횟수
     "download_timeout": 120,  # 다운로드 타임아웃 시간(초)
-    "concurrent_downloads": 2,  # 동시 다운로드 수
+    "concurrent_downloads": 4,  # 동시 다운로드 수
     "controlnet_subdir": "1.5"  # ControlNet 모델 하위 디렉토리
 }
 
@@ -119,6 +119,16 @@ class DownloadManager:
             print(f"파일이 이미 존재합니다: {file_path}")
             return file_path
 
+        # HuggingFace URL인 경우 hf_transfer 사용 시도
+        use_hf_transfer = False
+        if 'huggingface.co' in url:
+            try:
+                import hf_transfer
+                use_hf_transfer = True
+                print(f"hf_transfer를 사용하여 다운로드합니다: {filename}")
+            except ImportError:
+                print("hf_transfer를 찾을 수 없습니다. 일반 다운로드를 사용합니다.")
+
         downloaded_size = 0
         if temp_path.exists():
             downloaded_size = temp_path.stat().st_size
@@ -127,8 +137,15 @@ class DownloadManager:
         if downloaded_size:
             headers['Range'] = f"bytes={downloaded_size}-"
 
+        # 더 큰 청크 크기 사용 (1MB)
+        chunk_size = 1048576
+
         for attempt in range(self.retries + 1):
             try:
+                # hf_transfer 사용 설정 추가
+                if use_hf_transfer:
+                    headers['Authorization'] = 'Bearer hf_transfer'
+
                 response = requests.get(
                     url, headers=headers, stream=True, timeout=self.timeout)
                 response.raise_for_status()
@@ -151,7 +168,7 @@ class DownloadManager:
                         unit_divisor=1024,
                     ) as progress_bar:
                         start_time = time.time()
-                        for chunk in response.iter_content(chunk_size=8192):
+                        for chunk in response.iter_content(chunk_size=chunk_size):
                             if chunk:
                                 file.write(chunk)
                                 progress_bar.update(len(chunk))
@@ -159,9 +176,10 @@ class DownloadManager:
                                 # 속도 계산 및 표시
                                 elapsed = time.time() - start_time
                                 if elapsed > 0:
-                                    speed = progress_bar.n / elapsed / 1024  # KB/s
+                                    speed = progress_bar.n / elapsed / \
+                                        (1024 * 1024)  # MB/s로 표시
                                     progress_bar.set_postfix(
-                                        {"속도": f"{speed:.2f} KB/s"})
+                                        {"속도": f"{speed:.2f} MB/s"})
 
                 # 다운로드 완료 후 파일 이름 변경
                 temp_path.rename(file_path)
@@ -947,6 +965,7 @@ class ComfyUIModelManager:
             print("\n다운로드할 ControlNet 모델을 선택하세요.")
             print("1. 모든 모델 다운로드")
             print("2. 선택한 모델만 다운로드")
+            print("3. HuggingFace API로 직접 다운로드 (더 빠름)")
             print("0. 취소")
 
             choice = input("\n선택: ")
@@ -961,6 +980,8 @@ class ComfyUIModelManager:
                 except ValueError:
                     print("올바른 숫자를 입력하세요.")
                     return False
+            elif choice == "3":
+                return self._download_controlnet_direct()
             else:
                 print("다운로드가 취소되었습니다.")
                 return False
@@ -1007,6 +1028,114 @@ class ComfyUIModelManager:
         success_count = sum(1 for r in results if r is not None)
         print(
             f"\nControlNet 모델 다운로드 결과: {success_count}/{len(urls_to_download)} 성공")
+
+        return success_count > 0
+
+    def _download_controlnet_direct(self):
+        """HuggingFace API를 통해 직접 ControlNet 모델을 다운로드합니다 (더 빠름)."""
+        try:
+            from huggingface_hub import hf_hub_download
+        except ImportError:
+            print("huggingface_hub 패키지가 설치되어 있지 않습니다.")
+            self._ensure_dependencies()
+            from huggingface_hub import hf_hub_download
+
+        # ControlNet 모델 저장 디렉토리 설정 (하위 디렉토리 포함)
+        controlnet_base_dir = self.base_path / MODEL_DIRS["controlnet"]
+        subdir = self.config.get("controlnet_subdir", "1.5")
+        controlnet_dir = controlnet_base_dir / subdir
+        os.makedirs(controlnet_dir, exist_ok=True)
+
+        print(f"ControlNet 모델 저장 경로: {controlnet_dir}")
+
+        # 사용 가능한 모델 표시
+        self.list_controlnet_models()
+
+        # 다운로드할 모델 선택
+        print("\n다운로드할 ControlNet 모델을 선택하세요.")
+        print("1. 모든 모델 다운로드")
+        print("2. 선택한 모델만 다운로드")
+        print("0. 취소")
+
+        choice = input("\n선택: ")
+
+        models_to_download = []
+
+        if choice == "1":
+            # 모든 모델 다운로드
+            for url in self.controlnet_urls:
+                filename = os.path.basename(url)
+                models_to_download.append(filename)
+        elif choice == "2":
+            # 선택한 모델만 다운로드
+            indices_input = input("다운로드할 모델 번호 (쉼표로 구분, 예: 0,1,2): ")
+            try:
+                selected_indices = [int(idx.strip())
+                                    for idx in indices_input.split(",")]
+                for idx in selected_indices:
+                    if 0 <= idx < len(self.controlnet_urls):
+                        url = self.controlnet_urls[idx]
+                        filename = os.path.basename(url)
+                        models_to_download.append(filename)
+                    else:
+                        print(f"잘못된 인덱스: {idx}")
+            except ValueError:
+                print("올바른 숫자를 입력하세요.")
+                return False
+        else:
+            print("다운로드가 취소되었습니다.")
+            return False
+
+        if not models_to_download:
+            print("다운로드할 모델이 없습니다.")
+            return False
+
+        print(f"\n{len(models_to_download)}개 ControlNet 모델을 다운로드합니다...")
+
+        # 병렬 다운로드 준비
+        repo_id = "lllyasviel/ControlNet-v1-1"
+        max_workers = self.config.get("concurrent_downloads", 4)
+
+        # 병렬 다운로드 함수
+        def download_model(filename):
+            try:
+                print(f"다운로드 시작: {filename}")
+                output_path = hf_hub_download(
+                    repo_id=repo_id,
+                    filename=filename,
+                    local_dir=str(controlnet_dir),
+                    local_dir_use_symlinks=False,
+                    resume_download=True,
+                    force_download=False
+                )
+                print(f"다운로드 완료: {filename}")
+                return output_path
+            except Exception as e:
+                print(f"다운로드 실패: {filename} - {e}")
+                return None
+
+        # 병렬 다운로드 실행
+        results = []
+        with tqdm(total=len(models_to_download), desc="ControlNet 모델 다운로드") as pbar:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(
+                    download_model, filename): filename for filename in models_to_download}
+
+                for future in concurrent.futures.as_completed(futures):
+                    filename = futures[future]
+                    try:
+                        result = future.result()
+                        if result:
+                            results.append(result)
+                        pbar.update(1)
+                    except Exception as e:
+                        print(f"다운로드 오류: {filename} - {e}")
+                        pbar.update(1)
+
+        # 결과 확인
+        success_count = len(results)
+        print(
+            f"\nControlNet 모델 다운로드 결과: {success_count}/{len(models_to_download)} 성공")
 
         return success_count > 0
 
