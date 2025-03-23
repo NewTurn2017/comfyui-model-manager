@@ -1,7 +1,7 @@
 {
   "models": {},
   "config": {
-    "base_path": "/workspace/ComfyUI/models",
+    "base_path": "/home/elicer/ComfyUI/models",
     "civitai_token": "66b77acb9e843c7d8eddd32bef3023b4",
     "custom_repos": {
       "imp": {

@@ -5,7 +5,7 @@ from tqdm import tqdm
 
 # Constants
 REPO_URL = "https://github.com/Mikubill/sd-webui-controlnet"
-TARGET_FOLDER = r"/workspace/stable-diffusion-webui/extensions"
+TARGET_FOLDER = r"/home/elicer/ComfyUI/models/controlnet"
 urls = [
     "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11e_sd15_ip2p.pth",
     "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11e_sd15_shuffle.pth",
@@ -53,7 +53,7 @@ def download_files(url_list, save_path):
 
 if __name__ == "__main__":
 
-    models_folder = "/workspace/ComfyUI/models/controlnet/1.5"
+    models_folder = "/home/elicer/ComfyUI/models/controlnet/1.5"
     os.makedirs(models_folder, exist_ok=True)
 
     download_files(urls, models_folder)
